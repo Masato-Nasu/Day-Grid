@@ -1,6 +1,6 @@
 # DayGrid — 一日を正方格子に積む時計ウィジェット
 
-![DayGrid Android Widget](Screenshot1.png)
+![DayGrid Android Widget](screenshot1.png)
 
 横60（分）×縦24（時）の正方格子です。過ぎた1分が白い粒として積もり、
 現在の一粒だけが1秒周期で点滅します。0:00になると、淡い1,440粒だけの
