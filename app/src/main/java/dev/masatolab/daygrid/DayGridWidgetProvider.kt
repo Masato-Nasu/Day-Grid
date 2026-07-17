@@ -11,6 +11,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.os.Build
 import android.widget.RemoteViews
 import java.util.Calendar
 import kotlin.math.min
@@ -19,13 +20,11 @@ class DayGridWidgetProvider : AppWidgetProvider() {
 
     companion object {
         const val ACTION_TICK = "dev.masatolab.daygrid.TICK"
+        const val ACTION_REFRESH = "dev.masatolab.daygrid.REFRESH"
         const val BITMAP_WIDTH = 720
         const val COLS = 60
         const val ROWS = 24
         const val BITMAP_HEIGHT = BITMAP_WIDTH * ROWS / COLS
-
-        // Android 12以降でランチャーがウィジェット外周を角丸に切り抜いても、
-        // 四隅の粒が欠けないようにグリッドを内側へ収める。
         const val SAFE_MARGIN_RATIO = 0.0625f
 
         fun renderFrame(withCurrentTile: Boolean): Bitmap {
@@ -48,8 +47,6 @@ class DayGridWidgetProvider : AppWidgetProvider() {
                 Bitmap.Config.ARGB_8888
             )
             val canvas = Canvas(bmp)
-            // Transparent background — the wallpaper remains visible.
-
             val radius = cell * 0.34f
 
             val empty = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -72,15 +69,10 @@ class DayGridWidgetProvider : AppWidgetProvider() {
                 )
             }
 
-            // The whole day is shown as faint dots.
             for (t in 0 until COLS * ROWS) tile(t, empty)
 
             val now = Calendar.getInstance()
-            val hour = now.get(Calendar.HOUR_OF_DAY)
-            val minute = now.get(Calendar.MINUTE)
-            val total = hour * 60 + minute
-
-            // Elapsed minutes are solid white; only the current minute blinks.
+            val total = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
             for (t in 0 until total) tile(t, elapsed)
             if (withCurrentTile) tile(total, elapsed)
 
@@ -94,6 +86,28 @@ class DayGridWidgetProvider : AppWidgetProvider() {
             )
         }
 
+        private fun alarmPendingIntent(context: Context): PendingIntent {
+            val intent = Intent(context, DayGridWidgetProvider::class.java)
+                .setAction(ACTION_TICK)
+            return PendingIntent.getBroadcast(
+                context,
+                1001,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+
+        private fun refreshPendingIntent(context: Context): PendingIntent {
+            val intent = Intent(context, DayGridWidgetProvider::class.java)
+                .setAction(ACTION_REFRESH)
+            return PendingIntent.getBroadcast(
+                context,
+                1002,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+
         fun updateAll(context: Context) {
             val ids = widgetIds(context)
             if (ids.isEmpty()) return
@@ -101,44 +115,52 @@ class DayGridWidgetProvider : AppWidgetProvider() {
             val views = RemoteViews(context.packageName, R.layout.widget_day_grid)
             views.setImageViewBitmap(R.id.frame_on, renderFrame(true))
             views.setImageViewBitmap(R.id.frame_off, renderFrame(false))
+            views.setOnClickPendingIntent(R.id.widget_root, refreshPendingIntent(context))
             AppWidgetManager.getInstance(context).updateAppWidget(ids, views)
         }
 
         fun scheduleNextMinute(context: Context) {
             val alarmManager =
                 context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val intent = Intent(context, DayGridWidgetProvider::class.java)
-                .setAction(ACTION_TICK)
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
             val next = Calendar.getInstance().apply {
                 add(Calendar.MINUTE, 1)
                 set(Calendar.SECOND, 0)
                 set(Calendar.MILLISECOND, 0)
             }.timeInMillis
-            alarmManager.setExactAndAllowWhileIdle(
-                AlarmManager.RTC,
-                next,
-                pendingIntent
-            )
+            val pendingIntent = alarmPendingIntent(context)
+
+            // Wake the device at the next minute boundary. On devices that do not
+            // grant exact alarms, fall back to an inexact wake-up alarm rather than
+            // silently stopping updates.
+            try {
+                val exactAllowed =
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+                if (exactAllowed) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        next,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        next,
+                        pendingIntent
+                    )
+                }
+            } catch (_: SecurityException) {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    next,
+                    pendingIntent
+                )
+            }
         }
 
         fun cancelAlarm(context: Context) {
             val alarmManager =
                 context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val intent = Intent(context, DayGridWidgetProvider::class.java)
-                .setAction(ACTION_TICK)
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            alarmManager.cancel(pendingIntent)
+            alarmManager.cancel(alarmPendingIntent(context))
         }
 
         fun refreshIfEnabled(context: Context) {
@@ -156,8 +178,7 @@ class DayGridWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        updateAll(context)
-        scheduleNextMinute(context)
+        refreshIfEnabled(context)
     }
 
     override fun onEnabled(context: Context) {
@@ -172,10 +193,7 @@ class DayGridWidgetProvider : AppWidgetProvider() {
         super.onReceive(context, intent)
         when (intent.action) {
             ACTION_TICK,
-            Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_TIME_CHANGED,
-            Intent.ACTION_TIMEZONE_CHANGED,
-            Intent.ACTION_DATE_CHANGED -> refreshIfEnabled(context)
+            ACTION_REFRESH -> refreshIfEnabled(context)
         }
     }
 }
