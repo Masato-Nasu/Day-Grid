@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   build:
@@ -30,12 +32,12 @@ jobs:
         run: gradle assembleDebug --no-daemon
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk DayGrid-v0.1.1.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk DayGrid-v0.1.2.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: DayGrid-v0.1.1-APK
-          path: DayGrid-v0.1.1.apk
+          name: DayGrid-v0.1.2-APK
+          path: DayGrid-v0.1.2.apk
           if-no-files-found: error
           retention-days: 30
