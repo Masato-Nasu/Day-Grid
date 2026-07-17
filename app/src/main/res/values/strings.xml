@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DayGrid</string>
+    <string name="widget_description">横60分×縦24時の正方格子。過ぎた1分が白い粒として積もり、現在の一粒だけが点滅する時計。</string>
+</resources>
